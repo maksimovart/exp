@@ -23,7 +23,7 @@ int main( int argc, char** argv ) {
         std::cout << pages << ", " << (int) pt << ", " << ((int) pt) % 4096 << "\n";
         std::cout << *pt << "\n";
         ++pt;
-        if( i % 4096 == 0 ) 
+        if( i > 0 && i % 4096 == 0 ) 
             ++pages;
     }
 
