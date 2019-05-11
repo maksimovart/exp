@@ -139,7 +139,6 @@ public:
     RunReader& operator=( RunReader&& rhs ) = delete;
 
     ~RunReader() {
-        c_check( fsync(fd), ( std::string("RunReader: fsync failed") + path ) .c_str() );
         c_check( close(fd), ( std::string("RunReader: close failed") + path ) .c_str() );
     }
 
@@ -152,10 +151,9 @@ public:
     }
 
     T PopTop() {
-        assert( GetPoppedStructsCount() < GetTotalStructsCount() );
         T value = GetTop();
         ++popedStructsCount;
-        if( GetPoppedStructsCount() % structsPerRead == 0 
+        if( GetPoppedStructsCount() % structsPerRead == 0
             && GetPoppedStructsCount() < GetTotalStructsCount() ) {
             readNextPortion();
         }
