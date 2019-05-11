@@ -139,7 +139,7 @@ public:
     RunReader& operator=( RunReader&& rhs ) = delete;
 
     ~RunReader() {
-        fsync( fd );
+        c_check( fsync(fd), ( std::string("RunReader: fsync failed") + path ) .c_str() );
         c_check( close(fd), ( std::string("RunReader: close failed") + path ) .c_str() );
     }
 
