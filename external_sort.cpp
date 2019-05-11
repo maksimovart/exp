@@ -30,9 +30,7 @@ const int newFilePerm = S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH;
 const size_t pageSize = getpagesize();
 
 namespace ExternalSorting {
-    const static size_t memoryLimit = 16 * pageSize; // 1024 pages 
-
-    void Sort( const std::string& inputPath, const std::string& outputPath );
+    const static size_t memoryLimit = 16 * pageSize; // 16 pages 
 
     // produce ceil( inputPath_file_size / availableMemory ) runs
     // input file is an array of inputPath_file_size / sizeof( T ) structures T
@@ -219,6 +217,10 @@ private:
 template< typename T, typename Compare >
 void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, const std::string& outputPath, Compare cmp, size_t availableMemory ) {
 
+    using TReader = RunReader<T>;
+    using TReaderPtr = std::shared_ptr<TReader>;
+    using TReaderValue = std::pair< TReaderPtr, T >;
+
     size_t pagesCount = availableMemory / pageSize;
     assert( pagesCount > 1 );
 
@@ -231,21 +233,20 @@ void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, con
     // at least one struct can be processed
     assert( structsPerRun > 0 );
 
-    std::vector< RunReader<T>* > readers;
-    using ReaderValue = std::pair< RunReader<T>*, T >;
-    auto readerValueCompare = [ cmp ]( const ReaderValue& left, const ReaderValue& right ) -> bool {
-        // std::heap is max heap, we need min heap
+    std::vector< TReaderPtr > readers;
+    
+    auto readerValueCompare = [ cmp ]( const TReaderValue& left, const TReaderValue& right ) -> bool {
+        // std::heap is max heap, we need min heap => inverse result
         return !cmp( left.second, right.second );
     };
 
     // for debug purpose
     size_t totalStructsCount = 0;
 
-    std::vector< ReaderValue > readersCurrentValuesHeap;
+    std::vector< TReaderValue > readersCurrentValuesHeap;
     for( const std::string& path : inputPaths ) {
-        RunReader<T>* reader = new RunReader<T>( path, memoryPerRun );
+        TReaderPtr reader( new TReader( path, memoryPerRun ) );
         if( !reader->HasMore() ) {
-            delete reader;
             continue;
         }
         totalStructsCount += reader->GetTotalStructsCount();
@@ -282,7 +283,7 @@ void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, con
         }
 
         std::pop_heap( readersCurrentValuesHeap.begin(), readersCurrentValuesHeap.end(), readerValueCompare );
-        ReaderValue rv = readersCurrentValuesHeap.back();
+        TReaderValue rv = readersCurrentValuesHeap.back();
         readersCurrentValuesHeap.pop_back();
         
         T& value = rv.second;
@@ -292,22 +293,21 @@ void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, con
         ++writeBufCurrentStructs;
         ++processedStructsCount;
 
-        log( "Merging runs: heap size " << readersCurrentValuesHeap.size() << ", max value " );
+        log( "MergeRuns: heap size " << readersCurrentValuesHeap.size() << ", max value " );
         PrintSimpleStruct( value );
-        log( "Merging runs: processed " << processedStructsCount << "/" << totalStructsCount );
+        log( "MergeRuns: processed " << processedStructsCount << "/" << totalStructsCount );
 
-        RunReader<T>* reader = rv.first;
+        TReaderPtr reader( rv.first );
         if( !reader->HasMore() ) {
-            log( "Merging runs: reader has no more" );
+            log( "MergeRuns: reader has no more" );
             readers.erase( std::find( readers.begin(), readers.end(), reader ) );
-            delete reader;
             continue;
         }
 
         readersCurrentValuesHeap.push_back( std::make_pair( reader, reader->PopTop() ) );
         std::push_heap( readersCurrentValuesHeap.begin(), readersCurrentValuesHeap.end(), readerValueCompare );
-        
     }
+
     ssize_t writeRes = 0;
     size_t remainWrite = writeBufCurrentStructs * sizeof( T );
     size_t totalWrite = 0;
@@ -318,9 +318,7 @@ void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, con
     c_check( writeRes, "MergeRuns: result file write failed" );
     c_check( fsync( writeFd ), "MergeRuns: result file fsync failed" );
     c_check( close( writeFd ), "MergeRuns: result file close failed" );
-    
 }
-
 
 template< typename T, typename Print >
 void ExternalSorting::PrintRun( const std::string& inputPath, size_t runNumber, Print printFunc ) {
@@ -394,7 +392,7 @@ void GenerateTest( const std::string& outputPath, size_t structsCount ) {
 }
 
 void PrintSimpleStruct( const SimpleStruct& s ) {
-    printf( "UserId: %d MoneyCount: %d\n", s.userId, s.moneyCount );
+    log( "(" << s.userId << ", " << s.moneyCount << ")" );
 }
 
 int main( int argc, const char** argv ) {
