@@ -112,8 +112,6 @@ size_t ExternalSorting::ProduceRuns( const std::string& inputPath, Compare cmp, 
 template< typename T >
 class RunReader {
 public:
-    RunReader() = delete;
-
     RunReader( const std::string& _path, size_t _availableMemory ) : 
         path( _path ),
         availableMemory( _availableMemory ),
@@ -132,7 +130,7 @@ public:
 
         structsPerRead = availableMemory / sizeof( T );
 
-        log( "RunRead: " << path << " initialization; availableMemory " << availableMemory << ", structsPerRead " << structsPerRead << ", file size " << st.st_size );
+        log( "RunReader: " << path << " initialization; availableMemory " << availableMemory << ", structsPerRead " << structsPerRead << ", file size " << st.st_size );
     }
 
     RunReader( const RunReader& ) = delete;
@@ -141,10 +139,8 @@ public:
     RunReader& operator=( RunReader&& rhs ) = delete;
 
     ~RunReader() {
-        if( fd != -1) {
-            fsync( fd );
-            c_check( close(fd), ( std::string("RunReader: close failed") + path ) .c_str() );
-        }
+        fsync( fd );
+        c_check( close(fd), ( std::string("RunReader: close failed") + path ) .c_str() );
     }
 
     T GetTop() {
@@ -199,17 +195,17 @@ private:
         ssize_t readRes = 0;
         size_t remainRead = structsPerRead * sizeof( T );
         size_t totalRead = 0;
-        log( "RunRead: " << path << " need read " << remainRead );
+        log( "RunReader: " << path << " need read " << remainRead );
         while( readRes = read( fd, ptr + totalRead, remainRead ) ) {
             totalRead += readRes;
             remainRead -= readRes;
             totalReadSize += readRes;
 
-            log( "RunRead: " << path << " read " << readRes );
-            log( "RunRead: " << path << " needRead " << remainRead );
+            log( "RunReader: " << path << " read " << readRes );
+            log( "RunReader: " << path << " needRead " << remainRead );
         }
         c_check( readRes, ( std::string( "RunRead: " ) + path + " read failed" ).c_str() );
-        log( "RunRead: " << path << " total read size " << totalReadSize << " bytes (of " << st.st_size << " file bytes)" );
+        log( "RunReader: " << path << " total read size " << totalReadSize << " bytes (of " << st.st_size << " file bytes)" );
 
     }
 };
