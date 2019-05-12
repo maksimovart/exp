@@ -56,7 +56,7 @@ std::string ExternalSort::Sort( const std::string& inputPath, Compare cmp, size_
     log( "Sort: runs count " << runsCount );
     
     std::vector< std::string > oldEpoch;
-    for( int i = 1; i <= runsCount; ++i ) {
+    for( size_t i = 1; i <= runsCount; ++i ) {
         oldEpoch.push_back( generateRunFileName( inputPath, i, 1 ) );
     }
     std::vector< std::string > newEpoch;
