@@ -1,2 +1,2 @@
 all:
-	g++ -std=c++11 -g3 external_sort.cpp -o external
+	g++ -std=c++11 -g3 ExternalSort.cpp -o external

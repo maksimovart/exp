@@ -1,3 +1,5 @@
+#pragma once 
+
 #include <string>
 #include <algorithm>
 #include <unistd.h>
@@ -11,8 +13,6 @@
 #include <iostream>
 #include <utility>
 
-#define DEBUG
-
 #define c_check( res, str ) \
     if( res < 0 ) { perror( str ); exit( EXIT_FAILURE ); }
 
@@ -22,15 +22,19 @@
     #define log(x) {}
 #endif
 
-static std::string generateRunFileName( const std::string& inputPath, size_t runNumber ) {
-    return inputPath + "_run_" + std::to_string( runNumber );
+#define log_force(x) { std::cout << x << std::endl; } 
+
+static std::string generateRunFileName( const std::string& inputPath, size_t runNumber, size_t epoch ) {
+    return inputPath + "_run_" + std::to_string( epoch ) + "_" + std::to_string( runNumber );
 }
 
 const int newFilePerm = S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH;
 const size_t pageSize = getpagesize();
 
-namespace ExternalSorting {
-    const static size_t memoryLimit = 16 * pageSize; // 16 pages 
+namespace ExternalSort {
+    // external sort
+    template< typename T, typename Compare >
+    std::string Sort( const std::string& inputPath, Compare cmp, size_t availableMemory );
 
     // produce ceil( inputPath_file_size / availableMemory ) runs
     // input file is an array of inputPath_file_size / sizeof( T ) structures T
@@ -44,11 +48,65 @@ namespace ExternalSorting {
     // display run structure
     template< typename T, typename Print >
     void PrintRun( const std::string& inputPath, size_t runNumber, Print print );
-
 };
 
 template< typename T, typename Compare >
-size_t ExternalSorting::ProduceRuns( const std::string& inputPath, Compare cmp, size_t availableMemory ) {
+std::string ExternalSort::Sort( const std::string& inputPath, Compare cmp, size_t availableMemory ) {
+    size_t runsCount = ExternalSort::ProduceRuns<T>( inputPath, cmp, availableMemory );
+    log( "Sort: runs count " << runsCount );
+    
+    std::vector< std::string > oldEpoch;
+    for( int i = 1; i <= runsCount; ++i ) {
+        oldEpoch.push_back( generateRunFileName( inputPath, i, 1 ) );
+    }
+    std::vector< std::string > newEpoch;
+
+    size_t minMemoryPerRun = 2 * pageSize;
+    // at least 2 runs will be merged
+    assert( 2 * minMemoryPerRun < availableMemory );
+
+    size_t curMemory = 0;
+    size_t resultNumber = 1;
+    size_t epoch = 1;
+    std::vector< std::string > batch;
+    while( !oldEpoch.empty() ) {
+        batch.clear();
+        curMemory = 0;
+        while( curMemory < availableMemory && !oldEpoch.empty() ) {
+            batch.push_back( oldEpoch.back() );
+            oldEpoch.pop_back();
+            curMemory += minMemoryPerRun;
+        }
+        log( "Sort: curr iteration batch size " << batch.size() );
+        std::string resultPath = generateRunFileName( inputPath, resultNumber, epoch + 1 );
+        ++resultNumber;
+
+        ExternalSort::MergeRuns<T>( batch, resultPath, cmp, availableMemory );
+        newEpoch.push_back( resultPath );
+        log( "Sort: curr iteration old epoch size " << oldEpoch.size() << ", new epoch size " << newEpoch.size() );
+
+        for( const std::string& path : batch ) {
+            c_check( unlink( path.c_str() ), ( std::string( "Sort: unlink failed " ) + path ).c_str() );
+        }
+
+        if( oldEpoch.empty() && newEpoch.size() != 1 ) {
+            log( "Sort: copy new epoch to old epoch ");
+            while( !newEpoch.empty( )) {
+                oldEpoch.push_back( newEpoch.back() );
+                newEpoch.pop_back();
+            }
+            resultNumber = 1;
+            ++epoch;
+            log( "Sort: old epoch size " << oldEpoch.size() << "; new epoch size " << newEpoch.size() );
+        }
+    }
+    assert( newEpoch.size() == 1 );
+    return newEpoch.front();
+
+}
+
+template< typename T, typename Compare >
+size_t ExternalSort::ProduceRuns( const std::string& inputPath, Compare cmp, size_t availableMemory ) {
     assert( sizeof( T ) < availableMemory );
 
     int fd = open( inputPath.c_str(), O_RDONLY );
@@ -79,12 +137,12 @@ size_t ExternalSorting::ProduceRuns( const std::string& inputPath, Compare cmp, 
         }
         c_check( readRes, "ProduceRuns: read file failed" );
 
-        printf( "ProduceRuns: run %zd; read %zd bytes of %zd structures from %s\n", runNumber, totalRead, totalRead / sizeof( T ), inputPath.c_str() );
+        log( "ProduceRuns: run " << runNumber << "; read " << totalRead << " of " << totalRead / sizeof( T ) << " from " << inputPath );
         
         T* structPtr = reinterpret_cast<T*>( buf.get() );
         std::sort( structPtr, structPtr + ( totalRead / sizeof( T ) ), cmp );
 
-        std::string runPath = generateRunFileName( inputPath, runNumber );
+        std::string runPath = generateRunFileName( inputPath, runNumber, 1 );
 
         int runFd = open( runPath.c_str(), O_WRONLY | O_CREAT | O_EXCL, newFilePerm );
         c_check( runFd, "ProduceRuns: open run file failed" );
@@ -98,7 +156,7 @@ size_t ExternalSorting::ProduceRuns( const std::string& inputPath, Compare cmp, 
         }
         c_check( writeRes, "ProduceRuns: write run failed");
 
-        printf( "ProduceRuns: run %zd; total write %zd bytes of %zd structures to %s \n", runNumber, totalWrite, totalWrite / sizeof( T ), runPath.c_str() );
+        log( "ProduceRuns: run " << runNumber << "; total write " << totalWrite << " of " << totalWrite / sizeof( T ) << " to " << runPath );
         
         c_check( fsync( runFd ), "ProduceRuns: fsync failed" );
         c_check( close( runFd ), "ProduceRuns: close run file failed" );
@@ -107,6 +165,8 @@ size_t ExternalSorting::ProduceRuns( const std::string& inputPath, Compare cmp, 
     }
 
     c_check( close( fd ), "ProduceRuns: close source file failed " );
+
+    return runNumber;
 }
 
 template< typename T >
@@ -209,7 +269,7 @@ private:
 };
 
 template< typename T, typename Compare >
-void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, const std::string& outputPath, Compare cmp, size_t availableMemory ) {
+void ExternalSort::MergeRuns( const std::vector<std::string>& inputPaths, const std::string& outputPath, Compare cmp, size_t availableMemory ) {
 
     using TReader = RunReader<T>;
     using TReaderPtr = std::shared_ptr<TReader>;
@@ -287,8 +347,7 @@ void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, con
         ++writeBufCurrentStructs;
         ++processedStructsCount;
 
-        log( "MergeRuns: heap size " << readersCurrentValuesHeap.size() << ", max value " );
-        PrintSimpleStruct( value );
+        log( "MergeRuns: heap size " << readersCurrentValuesHeap.size() );
         log( "MergeRuns: processed " << processedStructsCount << "/" << totalStructsCount );
 
         TReaderPtr reader( rv.first );
@@ -315,15 +374,15 @@ void ExternalSorting::MergeRuns( const std::vector<std::string>& inputPaths, con
 }
 
 template< typename T, typename Print >
-void ExternalSorting::PrintRun( const std::string& inputPath, size_t runNumber, Print printFunc ) {
-    std::string runFileName = generateRunFileName( inputPath, runNumber );
+void ExternalSort::PrintRun( const std::string& inputPath, size_t runNumber, Print printFunc ) {
+    std::string runFileName = generateRunFileName( inputPath, runNumber, 0 );
     int fd = open( runFileName.c_str(), O_RDONLY );
     c_check( fd, "PrintRun: open failed" );
 
     struct stat st;
     stat( inputPath.c_str(), &st );
     size_t size = st.st_size;
-    printf( "PrintRun: File size %zd\n", size );
+    log( "PrintRun: file size " << size );
 
     char* buf = new char[ size ];    
     ssize_t readRes = 0;
@@ -337,7 +396,7 @@ void ExternalSorting::PrintRun( const std::string& inputPath, size_t runNumber, 
 
 
     size_t structsCount = totalRead / sizeof( T );
-    printf( "PrintRun: total read %zd bytes of %zd structs from %s run %zd\n", totalRead, structsCount, runFileName.c_str(), runNumber );
+    log( "PrintRun: total read " << totalRead << " bytes of " << structsCount << " from run " << runFileName );
     
     T* structPtr = reinterpret_cast<T*>( buf );
     for( size_t i = 0; i < structsCount; ++i ) {
@@ -345,87 +404,4 @@ void ExternalSorting::PrintRun( const std::string& inputPath, size_t runNumber, 
     }
 
     c_check( close( fd ), "PrintRun: close failed" );
-}
-
-struct SimpleStruct {
-    int userId;
-    int moneyCount;
-
-    SimpleStruct() : userId{ rand() % 10000 }, moneyCount{ rand() % 40 } {}
-};
-
-bool simpleStructCompare( const SimpleStruct& s1, const SimpleStruct& s2 ) {
-    return s1.userId < s2.userId || (s1.userId == s2.userId && s1.moneyCount < s2.moneyCount);
-}
-
-template< typename T >
-void GenerateTest( const std::string& outputPath, size_t structsCount ) {
-    int fd = open( outputPath.c_str(), O_WRONLY | O_CREAT | O_EXCL, newFilePerm );
-    c_check( fd, "GenerateTest: open failed");
-
-    size_t remainCount = structsCount;
-    assert( ExternalSorting::memoryLimit % sizeof( SimpleStruct ) == 0 );
-    size_t perIterationCount = ExternalSorting::memoryLimit / sizeof( SimpleStruct );
-    while( remainCount > 0 ) {
-        size_t currIterationCount = std::min( remainCount, perIterationCount );
-        std::shared_ptr<SimpleStruct> currStructs( new SimpleStruct[currIterationCount] );
-        printf( "GenerateTest: remain %zd structs\n", remainCount );
-        
-        ssize_t writeRes = 0;
-        size_t remainWrite = sizeof(SimpleStruct) * currIterationCount;
-        size_t totalWrite = 0;
-        while( writeRes = write( fd, currStructs.get() + totalWrite, remainWrite ) ) {
-            remainWrite -= writeRes;
-            totalWrite += writeRes;
-        }
-        c_check( writeRes, "GenerateTest: write failed");
-
-        remainCount -= currIterationCount;
-    }
-    c_check( close( fd ), "GenerateTest: close failed" );
-}
-
-void PrintSimpleStruct( const SimpleStruct& s ) {
-    log( "(" << s.userId << ", " << s.moneyCount << ")" );
-}
-
-int main( int argc, const char** argv ) {
-    assert( argc == 3 );
-    char path[256]{ 0 };
-    sprintf( path, "./%s_test.data", argv[1]);
-    size_t structuresCount = std::stoul( argv[2] ); 
-    GenerateTest<SimpleStruct>( path, structuresCount );
-
-    size_t runsCount = ExternalSorting::ProduceRuns<SimpleStruct>( path, simpleStructCompare, ExternalSorting::memoryLimit );
-
-    std::string runPath = generateRunFileName( path, 1 );
-    {
-        RunReader<SimpleStruct> reader( runPath, 1024 );
-        size_t readId = 1;;
-        while( reader.HasMore() ) {
-            std::cout << readId++ << std::endl;
-            PrintSimpleStruct( reader.PopTop() );
-        }
-    }
-
-    std::vector< std::string > runPaths;
-    for( int i = 1; i <= 10; ++i ) {
-        runPaths.push_back( generateRunFileName( path, i ) );
-    }
-    std::string resultPath = std::string( path ) + "__result";
-    ExternalSorting::MergeRuns< SimpleStruct >( runPaths, resultPath, simpleStructCompare, ExternalSorting::memoryLimit );
-
-    {
-        for( size_t i = 0; i < 20; ++i ) {
-            std::cout << std::endl;
-        }
-        std::cout << "Final result" << std::endl;
-        RunReader<SimpleStruct> reader( resultPath, 1024 );
-        size_t readId = 1;;
-        while( reader.HasMore() ) {
-            std::cout << readId++ << std::endl;
-            PrintSimpleStruct( reader.PopTop() );
-        }
-    }
-    //ExternalSorting::PrintRun<SimpleStruct>( path, 1, PrintSimpleStruct );
 }
