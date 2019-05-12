@@ -100,9 +100,9 @@ std::string ExternalSort::Sort( const std::string& inputPath, Compare cmp, size_
             log( "Sort: old epoch size " << oldEpoch.size() << "; new epoch size " << newEpoch.size() );
         }
     }
+    
     assert( newEpoch.size() == 1 );
     return newEpoch.front();
-
 }
 
 template< typename T, typename Compare >
